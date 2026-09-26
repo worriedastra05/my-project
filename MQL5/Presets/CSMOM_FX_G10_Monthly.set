@@ -20,6 +20,7 @@ InpUseDualMomentum=true
 InpMinAbsScore=0.0
 ; --- 3. Rebalancing ---
 InpRebalanceMode=2
+InpRebalanceEveryN=12
 InpRebalanceHour=21
 InpRebalanceMinute=0
 InpRebalanceDOW=1
@@ -58,4 +59,5 @@ InpMagic=20260926
 InpSlippage=30
 InpTradeComment=CSMOM
 InpVerboseLog=true
+InpRunDiagnostics=true
 InpShowPanel=true

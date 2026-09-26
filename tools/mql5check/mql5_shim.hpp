@@ -180,6 +180,7 @@ inline string AccountInfoString(int prop)   { (void)prop; return string(); }
 inline long   TerminalInfoInteger(int prop) { (void)prop; return 0; }
 inline long   MQLInfoInteger(int prop)      { (void)prop; return 0; }
 
+//--- predefined variables
 //------------------------------------------------------------------ timeseries / indicators
 inline int  CopyRates(const string &s, ENUM_TIMEFRAMES tf, int start, int count, MqlArr<MqlRates> &out)
   { (void)s; (void)tf; (void)start; (void)count; (void)out; return 0; }
@@ -187,8 +188,14 @@ inline int  CopyBuffer(int handle, int buf, int start, int count, MqlArr<double>
   { (void)handle; (void)buf; (void)start; (void)count; (void)out; return 0; }
 inline int  iATR(const string &s, ENUM_TIMEFRAMES tf, int period) { (void)s; (void)tf; (void)period; return 0; }
 inline bool IndicatorRelease(int handle) { (void)handle; return true; }
+inline int  CopyTime(const string &s, ENUM_TIMEFRAMES tf, int start, int count, MqlArr<datetime> &out)
+  { (void)s; (void)tf; (void)start; (void)count; (void)out; return 0; }
 inline int  PeriodSeconds(ENUM_TIMEFRAMES tf) { (void)tf; return 60; }
 inline int  Bars(const string &s, ENUM_TIMEFRAMES tf) { (void)s; (void)tf; return 0; }
+
+//--- predefined variables
+static const string _Symbol = "EURUSD";
+static const ENUM_TIMEFRAMES _Period = PERIOD_D1;
 
 //------------------------------------------------------------------ time
 inline datetime TimeCurrent() { return 0; }

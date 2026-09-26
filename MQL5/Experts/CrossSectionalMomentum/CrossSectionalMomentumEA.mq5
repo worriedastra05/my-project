@@ -64,9 +64,10 @@ enum ENUM_CSM_SIZING
 
 enum ENUM_CSM_REBALANCE
   {
-   REB_DAILY   = 0, // Daily
-   REB_WEEKLY  = 1, // Weekly
-   REB_MONTHLY = 2  // Monthly (h = 1 month, as in the literature)
+   REB_DAILY       = 0, // Daily
+   REB_WEEKLY      = 1, // Weekly
+   REB_MONTHLY     = 2, // Monthly (h = 1 month, as in the literature)
+   REB_EVERY_N_BARS = 3 // Every N bars of the signal timeframe (intraday)
   };
 
 //+------------------------------------------------------------------+
@@ -90,6 +91,7 @@ input double             InpMinAbsScore      = 0.0;             // Minimum |scor
 
 input group "=== 3. Rebalancing (holding period h) ===";
 input ENUM_CSM_REBALANCE InpRebalanceMode    = REB_MONTHLY;     // Rebalance frequency
+input int                InpRebalanceEveryN  = 12;              // REB_EVERY_N_BARS: rebalance every N signal bars
 input int                InpRebalanceHour    = 21;              // Rebalance hour (broker / server time)
 input int                InpRebalanceMinute  = 0;               // Rebalance minute
 input int                InpRebalanceDOW     = 1;               // Weekly: day of week (1=Mon .. 5=Fri)
@@ -131,6 +133,7 @@ input ulong              InpMagic            = 20260926;        // Magic number
 input ulong              InpSlippage         = 30;              // Max deviation (points)
 input string             InpTradeComment     = "CSMOM";         // Order comment
 input bool               InpVerboseLog       = true;            // Verbose journal logging
+input bool               InpRunDiagnostics   = true;            // Print a readiness table (why am I not trading?)
 input bool               InpShowPanel        = true;            // On-chart status panel
 
 //+------------------------------------------------------------------+
@@ -191,9 +194,14 @@ bool          g_haltedHard    = false;
 
 datetime      g_lastMaintain  = 0;
 string        g_lastError     = "";
+string        g_lastWarnShown = "";
 string        g_lastAction    = "waiting for the first rebalance";
 double        g_lastVolScale  = 1.0;
 double        g_lastPortVol   = 0.0;
+
+datetime      g_lastSeenBar   = 0;   // newest signal-TF bar we have observed
+int           g_barCounter    = 0;   // signal bars elapsed since the last rebalance
+bool          g_diagShown     = false;
 
 //+------------------------------------------------------------------+
 //| Logging helpers                                                   |
@@ -204,9 +212,14 @@ void LogInfo(const string msg)
       Print("[CSMOM] ", msg);
   }
 
+//--- de-duplicated: the rebalance loop retries every second until it
+//--- succeeds, and without this the journal would be unreadable.
 void LogWarn(const string msg)
   {
    g_lastError = msg;
+   if(msg == g_lastWarnShown)
+      return;
+   g_lastWarnShown = msg;
    Print("[CSMOM][WARN] ", msg);
   }
 
@@ -338,6 +351,45 @@ int SlotIndexOf(const string sym)
    return -1;
   }
 
+//--- Re-read the contract specification for one symbol.
+//--- This MUST be done per cycle rather than once in OnInit: inside the
+//--- Strategy Tester the non-chart symbols are not initialised yet when
+//--- OnInit runs, so SYMBOL_TRADE_TICK_VALUE and friends still read 0.
+//--- Validating there would reject the whole universe and the EA would
+//--- never place a single trade.
+bool RefreshSpecs(const int j)
+  {
+   string sym = g_slot[j].name;
+
+   g_slot[j].digits     = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   g_slot[j].point      = SymbolInfoDouble(sym, SYMBOL_POINT);
+   g_slot[j].tickSize   = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+   g_slot[j].tickValue  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE_LOSS);
+   if(g_slot[j].tickValue <= 0.0)
+      g_slot[j].tickValue = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
+   g_slot[j].volStep    = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+   g_slot[j].volMin     = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   g_slot[j].volMax     = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   g_slot[j].contract   = SymbolInfoDouble(sym, SYMBOL_TRADE_CONTRACT_SIZE);
+   g_slot[j].stopsLevel = (int)SymbolInfoInteger(sym, SYMBOL_TRADE_STOPS_LEVEL);
+
+   //--- quote-convention normalisation (metadata, safe to re-evaluate)
+   g_slot[j].flip = false;
+   if(InpUniverseMode == UNIV_FX_VS_USD)
+     {
+      string baseCcy  = SymbolInfoString(sym, SYMBOL_CURRENCY_BASE);
+      string quoteCcy = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
+      if(baseCcy == "USD" && quoteCcy != "USD")
+         g_slot[j].flip = true;            // USDJPY up == JPY weaker
+     }
+
+   if(g_slot[j].point <= 0.0 || g_slot[j].tickSize <= 0.0 || g_slot[j].tickValue <= 0.0)
+      return false;
+   if(g_slot[j].volStep <= 0.0 || g_slot[j].volMin <= 0.0)
+      return false;
+   return true;
+  }
+
 //--- resolve a user supplied name against what the broker actually offers
 string ResolveSymbol(const string raw)
   {
@@ -401,17 +453,15 @@ bool BuildUniverse()
       sd.enabled     = true;
       sd.flip        = false;
       sd.atrHandle   = INVALID_HANDLE;
-      sd.digits      = (int)SymbolInfoInteger(resolved, SYMBOL_DIGITS);
-      sd.point       = SymbolInfoDouble(resolved, SYMBOL_POINT);
-      sd.tickSize    = SymbolInfoDouble(resolved, SYMBOL_TRADE_TICK_SIZE);
-      sd.tickValue   = SymbolInfoDouble(resolved, SYMBOL_TRADE_TICK_VALUE_LOSS);
-      if(sd.tickValue <= 0.0)
-         sd.tickValue = SymbolInfoDouble(resolved, SYMBOL_TRADE_TICK_VALUE);
-      sd.volStep     = SymbolInfoDouble(resolved, SYMBOL_VOLUME_STEP);
-      sd.volMin      = SymbolInfoDouble(resolved, SYMBOL_VOLUME_MIN);
-      sd.volMax      = SymbolInfoDouble(resolved, SYMBOL_VOLUME_MAX);
-      sd.contract    = SymbolInfoDouble(resolved, SYMBOL_TRADE_CONTRACT_SIZE);
-      sd.stopsLevel  = (int)SymbolInfoInteger(resolved, SYMBOL_TRADE_STOPS_LEVEL);
+      sd.digits      = 5;
+      sd.point       = 0.0;
+      sd.tickSize    = 0.0;
+      sd.tickValue   = 0.0;
+      sd.volStep     = 0.0;
+      sd.volMin      = 0.0;
+      sd.volMax      = 0.0;
+      sd.contract    = 0.0;
+      sd.stopsLevel  = 0;
       sd.price       = 0.0;
       sd.atr         = 0.0;
       sd.ret         = 0.0;
@@ -423,28 +473,6 @@ bool BuildUniverse()
       sd.lots        = 0.0;
       sd.hasPosition = false;
 
-      if(sd.point <= 0.0 || sd.tickSize <= 0.0 || sd.tickValue <= 0.0)
-        {
-         LogWarn("Incomplete contract specification for " + resolved + " - skipped.");
-         continue;
-        }
-
-      //--- quote-convention normalisation. We always rank the return of the
-      //--- FOREIGN currency measured against the USD, so that EURUSD and
-      //--- USDJPY end up on the same axis.
-      if(InpUniverseMode == UNIV_FX_VS_USD)
-        {
-         string baseCcy  = SymbolInfoString(resolved, SYMBOL_CURRENCY_BASE);
-         string quoteCcy = SymbolInfoString(resolved, SYMBOL_CURRENCY_PROFIT);
-         if(baseCcy == "USD" && quoteCcy != "USD")
-            sd.flip = true;                      // USDJPY up  == JPY weaker
-         else
-            if(quoteCcy == "USD" && baseCcy != "USD")
-               sd.flip = false;                  // EURUSD up  == EUR stronger
-            else
-               LogWarn(resolved + " is not quoted against the USD - ranked on its raw return.");
-        }
-
       sd.atrHandle = iATR(resolved, InpStopTF, InpATRPeriod);
       if(sd.atrHandle == INVALID_HANDLE)
         {
@@ -455,6 +483,19 @@ bool BuildUniverse()
       ArrayResize(g_slot, g_count + 1);
       g_slot[g_count] = sd;
       g_count++;
+
+      //--- Specs are read lazily by RefreshSpecs() on every cycle. Do NOT
+      //--- validate them here: in the Strategy Tester they are still zero
+      //--- for non-chart symbols at OnInit time.
+      RefreshSpecs(g_count - 1);
+
+      if(InpUniverseMode == UNIV_FX_VS_USD)
+        {
+         string bc = SymbolInfoString(resolved, SYMBOL_CURRENCY_BASE);
+         string qc = SymbolInfoString(resolved, SYMBOL_CURRENCY_PROFIT);
+         if(bc != "USD" && qc != "USD" && StringLen(bc) > 0 && StringLen(qc) > 0)
+            LogWarn(resolved + " is not quoted against the USD - it will be ranked on its raw return.");
+        }
      }
 
    if(g_count < 2)
@@ -492,6 +533,15 @@ bool BuildAlignedMatrix()
      {
       cnt[j] = 0;
       g_slot[j].enabled = false;
+
+      //--- refresh the contract spec first; in the tester it only becomes
+      //--- valid once the symbol has been touched by the engine
+      if(!RefreshSpecs(j))
+        {
+         LogWarn("Contract specification not ready for " + g_slot[j].name +
+                 " (tick value / lot step still 0) - excluded this cycle.");
+         continue;
+        }
 
       MqlRates rates[];
       //--- start_pos = 1 keeps the still-forming bar out of the sample
@@ -715,7 +765,8 @@ bool ComputeSignals()
 //+------------------------------------------------------------------+
 //| Cross-sectional ranking: buy the winners, sell the losers         |
 //+------------------------------------------------------------------+
-void RankAndSelect()
+//--- returns the number of symbols that were actually rankable
+int RankAndSelect()
   {
    for(int j = 0; j < g_count; j++)
      {
@@ -737,8 +788,8 @@ void RankAndSelect()
 
    if(nv < 2)
      {
-      LogWarn("Fewer than 2 rankable symbols - staying flat.");
-      return;
+      LogWarn("Fewer than 2 rankable symbols this cycle - staying flat.");
+      return nv;
      }
 
    //--- insertion sort, descending by score (the universe is tiny)
@@ -800,6 +851,8 @@ void RankAndSelect()
         }
       LogInfo(s);
      }
+
+   return nv;
   }
 
 //+------------------------------------------------------------------+
@@ -939,7 +992,10 @@ void ComputeLots()
       g_slot[j].lots = NormalizeLots(j, g_slot[j].lots);
       if(g_slot[j].lots <= 0.0)
         {
-         LogInfo(g_slot[j].name + ": computed size is below the broker minimum - leg skipped.");
+         LogWarn(g_slot[j].name + ": computed lot is below the broker minimum of " +
+                 DoubleToString(g_slot[j].volMin, 2) +
+                 " - leg skipped. Raise InpPortfolioRiskPct, lower InpSL_ATR, " +
+                 "reduce the number of legs, or increase the account size.");
          g_slot[j].target = 0;
         }
      }
@@ -1106,8 +1162,9 @@ bool OpenLeg(const int j)
    return false;
   }
 
-//--- reconcile the live book with the freshly computed target book
-void ExecuteTargets()
+//--- reconcile the live book with the freshly computed target book,
+//--- returns the number of legs that ended up live
+int ExecuteTargets()
   {
    for(int j = 0; j < g_count; j++)
       g_slot[j].hasPosition = false;
@@ -1181,6 +1238,7 @@ void ExecuteTargets()
    g_lastAction = StringFormat("%s - %d legs live (%d new)",
                                TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES), held, opened);
    LogInfo(g_lastAction);
+   return held;
   }
 
 //+------------------------------------------------------------------+
@@ -1363,10 +1421,24 @@ int KeyMonth(const MqlDateTime &dt)
    return dt.year * 12 + dt.mon;
   }
 
+//--- open time of the newest signal-timeframe bar, used by REB_EVERY_N_BARS
+datetime SignalBarTime()
+  {
+   string ref = (g_count > 0) ? g_slot[0].name : _Symbol;
+   datetime t[];
+   if(CopyTime(ref, InpSignalTF, 0, 1, t) < 1)
+      return 0;
+   return t[0];
+  }
+
 bool ShouldRebalance(const datetime now)
   {
    MqlDateTime dt;
    TimeToStruct(now, dt);
+
+   //--- bar-count mode is an intraday cadence: no hour or weekend gate
+   if(InpRebalanceMode == REB_EVERY_N_BARS)
+      return (g_lastRebalance == 0 || g_barCounter >= MathMax(1, InpRebalanceEveryN));
 
    //--- never rebalance over the weekend
    if(dt.day_of_week == 0 || dt.day_of_week == 6)
@@ -1401,6 +1473,97 @@ void StampRebalance(const datetime now)
    g_keyDay        = KeyDay(dt);
    g_keyWeek       = KeyWeek(dt);
    g_keyMonth      = KeyMonth(dt);
+   g_barCounter    = 0;
+  }
+
+//+------------------------------------------------------------------+
+//| Diagnostics: a per-symbol readiness table                         |
+//|                                                                   |
+//| This is the first thing to look at when the EA takes no trades.   |
+//| It prints, for every symbol, whether the contract spec, history,  |
+//| ATR and quotes are actually available, and what lot size the      |
+//| current settings would produce.                                   |
+//+------------------------------------------------------------------+
+void DiagnoseUniverse()
+  {
+   double equity    = AccountInfoDouble(ACCOUNT_EQUITY);
+   int    minNeeded = (int)MathMax(InpFormationBars + InpSkipBars + 2, InpVolLookback + 2);
+   int    legs      = (int)MathMax(1, InpLongCount + InpShortCount);
+
+   Print("[CSMOM] ===================== DIAGNOSTICS =====================");
+   PrintFormat("[CSMOM] equity=%.2f %s | terminal algo=%s | account expert=%s | positions=%d",
+               equity, AccountInfoString(ACCOUNT_CURRENCY),
+               (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ? "ON" : "OFF"),
+               (AccountInfoInteger(ACCOUNT_TRADE_EXPERT) ? "ON" : "OFF"),
+               PositionsTotal());
+   PrintFormat("[CSMOM] signalTF=%s needs >= %d bars | stopTF=%s | rebalance=%s | universe=%d",
+               EnumToString(InpSignalTF), minNeeded, EnumToString(InpStopTF),
+               EnumToString(InpRebalanceMode), g_count);
+   PrintFormat("[CSMOM] %-12s %7s %6s %6s %10s %9s %8s %8s  %s",
+               "SYMBOL", "BARS", "SPEC", "ATR", "SPREAD", "SPR/ATR", "MINLOT", "CALCLOT", "VERDICT");
+
+   int ready = 0;
+   for(int j = 0; j < g_count; j++)
+     {
+      string sym   = g_slot[j].name;
+      bool   spec  = RefreshSpecs(j);
+      int    bars  = Bars(sym, InpSignalTF);
+
+      double atr = 0.0;
+      double buf[];
+      if(CopyBuffer(g_slot[j].atrHandle, 0, 1, 1, buf) >= 1)
+         atr = buf[0];
+
+      MqlTick tick;
+      bool   gotTick = SymbolInfoTick(sym, tick);
+      double spread  = (gotTick ? (tick.ask - tick.bid) : 0.0);
+      double sprPct  = (atr > 0.0 ? spread / atr * 100.0 : 0.0);
+
+      //--- what lot would this leg get right now?
+      double calcLot = 0.0;
+      if(spec && atr > 0.0 && g_slot[j].point > 0.0)
+        {
+         double risk = equity * (InpPortfolioRiskPct / 100.0) / (double)legs;
+         double mpp  = MoneyPerPoint(j);
+         double slp  = (MathMax(InpSL_ATR, 0.1) * atr) / g_slot[j].point;
+         if(mpp > 0.0 && slp > 0.0)
+            calcLot = risk / (slp * mpp);
+        }
+
+      string verdict = "READY";
+      if(!spec)
+         verdict = "NO CONTRACT SPEC (tick value 0 - symbol not initialised yet)";
+      else
+         if(bars < minNeeded)
+            verdict = StringFormat("NOT ENOUGH HISTORY (%d < %d)", bars, minNeeded);
+         else
+            if(atr <= 0.0)
+               verdict = "ATR NOT READY";
+            else
+               if(!gotTick)
+                  verdict = "NO QUOTES";
+               else
+                  if(InpMaxSpreadATRPct > 0.0 && sprPct > InpMaxSpreadATRPct)
+                     verdict = StringFormat("SPREAD TOO WIDE (%.1f%% > %.1f%% of ATR)",
+                                            sprPct, InpMaxSpreadATRPct);
+                  else
+                     if(calcLot < g_slot[j].volMin)
+                        verdict = StringFormat("LOT TOO SMALL (%.4f < min %.2f)",
+                                               calcLot, g_slot[j].volMin);
+                     else
+                        ready++;
+
+      PrintFormat("[CSMOM] %-12s %7d %6s %6s %10s %8.1f%% %8.2f %8.4f  %s",
+                  sym, bars, (spec ? "ok" : "--"), (atr > 0.0 ? "ok" : "--"),
+                  DoubleToString(spread, (g_slot[j].digits > 0 ? g_slot[j].digits : 5)),
+                  sprPct, g_slot[j].volMin, calcLot, verdict);
+     }
+
+   PrintFormat("[CSMOM] %d of %d symbols are ready to trade.", ready, g_count);
+   if(ready < 2)
+      Print("[CSMOM] A cross-sectional strategy cannot rank fewer than 2 symbols. "
+            "Fix the VERDICT column above.");
+   Print("[CSMOM] =======================================================");
   }
 
 //+------------------------------------------------------------------+
@@ -1410,16 +1573,30 @@ void Rebalance()
   {
    LogInfo("---- rebalance " + TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES) + " ----");
 
+   //--- any of these failing means "not ready yet"; do NOT stamp the
+   //--- rebalance, otherwise a whole month could be silently skipped
+   //--- while the tester is still warming up its history.
    if(!BuildAlignedMatrix())
       return;
    if(!ComputeSignals())
       return;
 
-   RankAndSelect();
-   ComputeLots();
-   ExecuteTargets();
+   int rankable = RankAndSelect();
+   if(rankable < 2)
+      return;
 
+   ComputeLots();
+   int held = ExecuteTargets();
+
+   //--- the cycle genuinely ran, so consume it even if it produced no legs
    StampRebalance(TimeCurrent());
+
+   if(held == 0)
+     {
+      LogWarn("Rebalance completed but opened NO positions - see the diagnostics table below.");
+      if(InpRunDiagnostics)
+         DiagnoseUniverse();
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -1474,17 +1651,34 @@ void Heartbeat()
    datetime now = TimeCurrent();
 
    //--- throttle the housekeeping to once per second
-   if(now != g_lastMaintain)
+   if(now == g_lastMaintain)
+      return;
+   g_lastMaintain = now;
+
+   //--- track elapsed signal-timeframe bars for REB_EVERY_N_BARS
+   datetime bt = SignalBarTime();
+   if(bt > 0 && bt != g_lastSeenBar)
      {
-      g_lastMaintain = now;
-      UpdateRiskGuards();
-      ManageOpenPositions();
-
-      if(TradingAllowed() && ShouldRebalance(now))
-         Rebalance();
-
-      UpdatePanel();
+      if(g_lastSeenBar > 0)
+         g_barCounter++;
+      g_lastSeenBar = bt;
      }
+
+   UpdateRiskGuards();
+   ManageOpenPositions();
+
+   if(TradingAllowed() && ShouldRebalance(now))
+      Rebalance();
+
+   //--- one-shot readiness report once the terminal has warmed up
+   if(InpRunDiagnostics && !g_diagShown && g_lastRebalance == 0 && g_barCounter >= 2)
+     {
+      g_diagShown = true;
+      Print("[CSMOM] No rebalance has run yet. Readiness report:");
+      DiagnoseUniverse();
+     }
+
+   UpdatePanel();
   }
 
 //+------------------------------------------------------------------+
@@ -1535,11 +1729,29 @@ int OnInit()
    //--- a timer keeps the EA alive even on charts with sparse ticks
    EventSetTimer(30);
 
-   LogInfo("Initialised. Rebalance mode " + EnumToString(InpRebalanceMode) +
-           StringFormat(" at %02d:%02d server time.", InpRebalanceHour, InpRebalanceMinute));
+   if(InpRebalanceMode == REB_EVERY_N_BARS)
+      LogInfo(StringFormat("Initialised. Rebalancing every %d %s bars.",
+                           InpRebalanceEveryN, EnumToString(InpSignalTF)));
+   else
+      LogInfo("Initialised. Rebalance mode " + EnumToString(InpRebalanceMode) +
+              StringFormat(" at %02d:%02d server time.", InpRebalanceHour, InpRebalanceMinute));
+
+   //--- loud warning for the single most common backtest mistake: running a
+   //--- monthly-rebalanced portfolio over a test window that is too short to
+   //--- contain even one rebalance.
+   if(InpRebalanceMode == REB_MONTHLY)
+      Print("[CSMOM] NOTE: monthly rebalancing. A backtest shorter than ~2 months will "
+            "produce very few or zero trades. It also needs ",
+            (int)MathMax(InpFormationBars + InpSkipBars + 2, InpVolLookback + 2),
+            " bars of ", EnumToString(InpSignalTF),
+            " history BEFORE the test start date. For a short intraday test use "
+            "InpRebalanceMode = REB_EVERY_N_BARS with an intraday InpSignalTF.");
 
    if(InpRebalanceOnStart && TradingAllowed())
       Rebalance();
+
+   if(InpRunDiagnostics)
+      DiagnoseUniverse();
 
    UpdatePanel();
    return INIT_SUCCEEDED;

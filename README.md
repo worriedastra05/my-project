@@ -45,6 +45,7 @@ MQL5/
   Presets/
     CSMOM_FX_G10_Monthly.set         paper-faithful MOM(1,1), monthly
     CSMOM_FX_G10_Weekly.set          faster variant, weekly
+    CSMOM_FX_M5_Intraday.set         intraday plumbing test (see Troubleshooting)
 docs/
   STRATEGY.md                        research basis, defaults, caveats
 tools/mql5check/                     dev-only static checker (see below)
@@ -78,13 +79,15 @@ the same magic number.
 | `InpSignalType` | vol-adjusted | Raw return (literal J-T) or return / volatility. |
 | `InpLongCount` / `InpShortCount` | `3` / `3` | Legs per side. |
 | `InpUseDualMomentum` | `true` | Only buy a winner if its own momentum is positive too. |
-| `InpRebalanceMode` | Monthly | Holding period *h*. Monthly is what the literature supports. |
+| `InpRebalanceMode` | Monthly | Holding period *h*. Monthly is what the literature supports. `REB_EVERY_N_BARS` gives an intraday cadence. |
+| `InpRebalanceEveryN` | `12` | With `REB_EVERY_N_BARS`: rebalance every N signal-timeframe bars. |
 | `InpSizingMode` | Inverse vol | Fixed lot / equal risk % / inverse-volatility risk parity. |
 | `InpPortfolioRiskPct` | `2.5` | Total equity at risk across all legs. |
 | `InpTargetVolAnnual` | `10.0` | Portfolio volatility target (Barroso–Santa-Clara scaling). |
 | `InpSL_ATR` / `InpTP_ATR` | `2.5` / `5.0` | **Stop loss and take profit**, in ATR multiples. `0` disables. |
 | `InpUseTrailing` | `true` | ATR trailing stop after `InpTrailStart_ATR` of profit. |
 | `InpMaxDrawdownPct` | `20.0` | Hard kill-switch: flattens the book and stops trading. |
+| `InpRunDiagnostics` | `true` | Prints a per-symbol readiness table when nothing trades. See Troubleshooting. |
 
 Full list with tooltips is in the EA's Inputs tab.
 
@@ -120,6 +123,49 @@ loads — that is expected and is logged as
 Watch the Journal for `[CSMOM]` lines: the `Universe (...)` line should mark
 every `USDxxx` symbol with `(inv)`, and each `Ranking:` line shows every score
 with `/L` or `/S` on the selected legs.
+
+---
+
+## Troubleshooting: "backtest me koi trade hi nahi le raha"
+
+The EA prints a **diagnostics table** to the Journal (`InpRunDiagnostics = true`,
+on by default). It runs at startup, and again whenever a rebalance completes
+without opening anything. The `VERDICT` column names the exact problem:
+
+```
+[CSMOM] SYMBOL          BARS   SPEC    ATR     SPREAD   SPR/ATR   MINLOT  CALCLOT  VERDICT
+[CSMOM] EURUSD          5000     ok     ok    0.00012      1.7%     0.01   0.0240  READY
+[CSMOM] USDNOK           800     ok     ok    0.00310     28.4%     0.01   0.0031  SPREAD TOO WIDE
+```
+
+The four causes, in order of how often they bite:
+
+| Verdict / symptom | Cause | Fix |
+|---|---|---|
+| **No trades at all, on any settings** | `InpRebalanceMode = Monthly` but the test window is shorter than a month. The book reconstitutes **once a month** by design. | Use a 2+ year test window, or load `CSMOM_FX_M5_Intraday.set` to see it trade on a short M5 test. |
+| `NOT ENOUGH HISTORY (n < m)` | The default D1 signal needs ~62 **daily** bars *before* the test start date. On a short M5 test that history may not exist. | Extend the test start date, or switch `InpSignalTF` to an intraday timeframe. |
+| `NO CONTRACT SPEC` | The symbol has not been initialised by the tester yet. Transient — it resolves within a few bars. | None needed. (This used to abort `OnInit` entirely; fixed.) |
+| `LOT TOO SMALL` | Account too small for 6 legs at the configured risk with a wide ATR stop. | Raise the tester deposit, raise `InpPortfolioRiskPct`, lower `InpSL_ATR`, or reduce `InpLongCount`/`InpShortCount`. |
+| `SPREAD TOO WIDE` | `InpMaxSpreadATRPct` is calibrated for D1 ATR. Intraday ATR is much smaller, so the same spread is a far bigger fraction of it. | Raise `InpMaxSpreadATRPct` (the M5 preset uses 30%). |
+
+### Testing on M5 specifically
+
+The default preset is a **monthly-rebalanced portfolio**. Running it on an M5
+chart does not make it trade more often — the chart timeframe only sets how
+often `OnTick` fires; the signal timeframe (`InpSignalTF`) and the rebalance
+cadence (`InpRebalanceMode`) are what drive trading.
+
+For a short intraday test, load **`CSMOM_FX_M5_Intraday.set`**, which sets:
+
+- `InpSignalTF = M5`, `InpFormationBars = 48` (4 hours of formation)
+- `InpRebalanceMode = REB_EVERY_N_BARS`, `InpRebalanceEveryN = 12` (hourly)
+- `InpVolLookback = 288` (one trading day) → only ~290 M5 bars of warm-up
+- `InpMaxSpreadATRPct = 30`, dual momentum off, 2 long / 2 short
+
+⚠️ Be clear about what that preset is: a **plumbing test**, not the researched
+strategy. All the evidence behind this EA is monthly. At an hourly cadence you
+pay the spread ~8× per day instead of once a month, and there is no published
+result supporting a 4-hour currency momentum signal. See `docs/STRATEGY.md` §4.
 
 ---
 
