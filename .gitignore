@@ -1,0 +1,10 @@
+# MetaTrader compiled binaries and logs (rebuild with F7 in MetaEditor)
+*.ex5
+*.ex4
+*.log
+MQL5/Logs/
+Tester/
+
+# Python
+__pycache__/
+*.pyc

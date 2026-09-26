@@ -1,0 +1,60 @@
+; CrossSectionalMomentumEA - preset "FX G10, weekly rebalance"
+; A faster variant: ~2 week formation, weekly reconstitution.
+; More trades and more turnover cost than the monthly preset, so only
+; use it on a low-spread account. Validate on your own broker's data.
+;
+; --- 1. Universe ---
+InpSymbols=EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,USDJPY,USDSEK,USDNOK
+InpSymbolSuffix=
+InpUniverseMode=0
+; --- 2. Momentum signal ---
+InpSignalTF=16408
+InpFormationBars=10
+InpSkipBars=0
+InpSignalType=1
+InpVolLookback=60
+InpLongCount=2
+InpShortCount=2
+InpUseDualMomentum=true
+InpMinAbsScore=0.0
+; --- 3. Rebalancing ---
+InpRebalanceMode=1
+InpRebalanceHour=21
+InpRebalanceMinute=0
+InpRebalanceDOW=1
+InpRebalanceDOM=1
+InpRebalanceOnStart=true
+InpResizeExisting=false
+InpResizeTolPct=35.0
+; --- 4. Sizing / risk ---
+InpSizingMode=2
+InpFixedLot=0.1
+InpRiskPctPerLeg=0.35
+InpPortfolioRiskPct=2.0
+InpUseVolTarget=true
+InpTargetVolAnnual=8.0
+InpVolScaleMin=0.25
+InpVolScaleMax=2.0
+InpMaxGrossLeverage=4.0
+InpMaxMarginPct=30.0
+; --- 5. Stops ---
+InpStopTF=16408
+InpATRPeriod=14
+InpSL_ATR=2.0
+InpTP_ATR=4.0
+InpUseBreakEven=true
+InpBE_Trigger_ATR=1.0
+InpBE_Offset_ATR=0.1
+InpUseTrailing=true
+InpTrailStart_ATR=1.5
+InpTrail_ATR=1.75
+; --- 6. Safety ---
+InpMaxSpreadATRPct=5.0
+InpMaxDailyLossPct=3.0
+InpMaxDrawdownPct=15.0
+InpCloseAllOnHalt=true
+InpMagic=20260927
+InpSlippage=30
+InpTradeComment=CSMOMW
+InpVerboseLog=true
+InpShowPanel=true

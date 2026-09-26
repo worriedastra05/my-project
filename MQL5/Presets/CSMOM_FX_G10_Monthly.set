@@ -1,0 +1,61 @@
+; CrossSectionalMomentumEA - preset "FX G10, monthly rebalance"
+; Paper-faithful MOM(1,1): one-month formation, one-month holding.
+; Menkhoff, Sarno, Schmeling & Schrimpf (2012), JFE 106(3), 660-684.
+; Load in MetaTrader 5 via Strategy Tester > Inputs > Load, or the EA
+; properties dialog > Load.
+;
+; --- 1. Universe ---
+InpSymbols=EURUSD,GBPUSD,AUDUSD,NZDUSD,USDCAD,USDCHF,USDJPY,USDSEK,USDNOK
+InpSymbolSuffix=
+InpUniverseMode=0
+; --- 2. Momentum signal ---
+InpSignalTF=16408
+InpFormationBars=21
+InpSkipBars=0
+InpSignalType=1
+InpVolLookback=60
+InpLongCount=3
+InpShortCount=3
+InpUseDualMomentum=true
+InpMinAbsScore=0.0
+; --- 3. Rebalancing ---
+InpRebalanceMode=2
+InpRebalanceHour=21
+InpRebalanceMinute=0
+InpRebalanceDOW=1
+InpRebalanceDOM=1
+InpRebalanceOnStart=true
+InpResizeExisting=false
+InpResizeTolPct=35.0
+; --- 4. Sizing / risk ---
+InpSizingMode=2
+InpFixedLot=0.1
+InpRiskPctPerLeg=0.35
+InpPortfolioRiskPct=2.5
+InpUseVolTarget=true
+InpTargetVolAnnual=10.0
+InpVolScaleMin=0.25
+InpVolScaleMax=2.5
+InpMaxGrossLeverage=5.0
+InpMaxMarginPct=35.0
+; --- 5. Stops ---
+InpStopTF=16408
+InpATRPeriod=14
+InpSL_ATR=2.5
+InpTP_ATR=5.0
+InpUseBreakEven=true
+InpBE_Trigger_ATR=1.2
+InpBE_Offset_ATR=0.1
+InpUseTrailing=true
+InpTrailStart_ATR=1.8
+InpTrail_ATR=2.0
+; --- 6. Safety ---
+InpMaxSpreadATRPct=6.0
+InpMaxDailyLossPct=4.0
+InpMaxDrawdownPct=20.0
+InpCloseAllOnHalt=true
+InpMagic=20260926
+InpSlippage=30
+InpTradeComment=CSMOM
+InpVerboseLog=true
+InpShowPanel=true
