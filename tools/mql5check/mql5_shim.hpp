@@ -133,6 +133,8 @@ const int ACCOUNT_CURRENCY      = 35;
 const int TERMINAL_TRADE_ALLOWED = 40;
 const int MQL_TRADE_ALLOWED      = 41;
 const int MQL_TESTER             = 42;
+const int MQL_VISUAL_MODE        = 43;
+const int MQL_OPTIMIZATION       = 44;
 
 const int POSITION_SYMBOL     = 50;
 const int POSITION_MAGIC      = 51;

@@ -48,6 +48,7 @@ MQL5/
     CSMOM_FX_M5_Intraday.set         intraday plumbing test (see Troubleshooting)
 docs/
   STRATEGY.md                        research basis, defaults, caveats
+  BACKTEST_GUIDE.md                  step-by-step tester setup + Journal decoder
 tools/mql5check/                     dev-only static checker (see below)
 ```
 
@@ -128,6 +129,8 @@ with `/L` or `/S` on the selected legs.
 
 ## Troubleshooting: "backtest me koi trade hi nahi le raha"
 
+👉 **Step-by-step walkthrough (Hinglish): [`docs/BACKTEST_GUIDE.md`](docs/BACKTEST_GUIDE.md)**
+
 The EA prints a **diagnostics table** to the Journal (`InpRunDiagnostics = true`,
 on by default). It runs at startup, and again whenever a rebalance completes
 without opening anything. The `VERDICT` column names the exact problem:
@@ -142,6 +145,9 @@ The four causes, in order of how often they bite:
 
 | Verdict / symptom | Cause | Fix |
 |---|---|---|
+| **No trades, no `[CSMOM]` lines at all** | The EA was not recompiled, so MT5 is running the old `.ex5`. | MetaEditor → `F7`. Look for the `v1.10 - starting up` banner in the Journal. |
+| **`Universe (0)` or `(1)`** | Broker uses suffixed names (`EURUSDm`, `EURUSD.a`). | v1.10 auto-detects the suffix from the chart symbol. Otherwise set `InpSymbolSuffix`, or copy the names the EA prints for you. |
+| **`Trading blocked: ...`** | An algo-trading switch is off. | The message names the exact switch. (v1.10 no longer checks terminal-level switches inside the tester — that was a silent killer.) |
 | **No trades at all, on any settings** | `InpRebalanceMode = Monthly` but the test window is shorter than a month. The book reconstitutes **once a month** by design. | Use a 2+ year test window, or load `CSMOM_FX_M5_Intraday.set` to see it trade on a short M5 test. |
 | `NOT ENOUGH HISTORY (n < m)` | The default D1 signal needs ~62 **daily** bars *before* the test start date. On a short M5 test that history may not exist. | Extend the test start date, or switch `InpSignalTF` to an intraday timeframe. |
 | `NO CONTRACT SPEC` | The symbol has not been initialised by the tester yet. Transient — it resolves within a few bars. | None needed. (This used to abort `OnInit` entirely; fixed.) |

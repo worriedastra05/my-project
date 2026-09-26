@@ -32,7 +32,7 @@
 //|  optional break-even and ATR trailing.                            |
 //+------------------------------------------------------------------+
 #property copyright "Cross-Sectional Momentum EA"
-#property version   "1.00"
+#property version   "1.10"
 #property description "Classical cross-sectional (relative-strength) momentum portfolio."
 #property description "Ranks a universe, buys the top N and sells the bottom N,"
 #property description "sizes by inverse volatility with a portfolio volatility target,"
@@ -201,7 +201,9 @@ double        g_lastPortVol   = 0.0;
 
 datetime      g_lastSeenBar   = 0;   // newest signal-TF bar we have observed
 int           g_barCounter    = 0;   // signal bars elapsed since the last rebalance
-bool          g_diagShown     = false;
+datetime      g_lastDiag      = 0;   // last time the readiness report was printed
+string        g_autoSuffix    = "";  // broker suffix inferred from the chart symbol
+datetime      g_lastUniverseTry = 0; // last attempt to (re)build the universe
 
 //+------------------------------------------------------------------+
 //| Logging helpers                                                   |
@@ -351,6 +353,18 @@ int SlotIndexOf(const string sym)
    return -1;
   }
 
+//--- Create the ATR handle on demand. In the Strategy Tester iATR() on a
+//--- non-chart symbol can fail on the very first calls, before the engine
+//--- has synchronised that symbol's history. Creating it in OnInit and
+//--- giving up would permanently drop the symbol from the universe.
+bool EnsureAtrHandle(const int j)
+  {
+   if(g_slot[j].atrHandle != INVALID_HANDLE)
+      return true;
+   g_slot[j].atrHandle = iATR(g_slot[j].name, InpStopTF, InpATRPeriod);
+   return (g_slot[j].atrHandle != INVALID_HANDLE);
+  }
+
 //--- Re-read the contract specification for one symbol.
 //--- This MUST be done per cycle rather than once in OnInit: inside the
 //--- Strategy Tester the non-chart symbols are not initialised yet when
@@ -383,11 +397,38 @@ bool RefreshSpecs(const int j)
          g_slot[j].flip = true;            // USDJPY up == JPY weaker
      }
 
+   if(!EnsureAtrHandle(j))
+      return false;
    if(g_slot[j].point <= 0.0 || g_slot[j].tickSize <= 0.0 || g_slot[j].tickValue <= 0.0)
       return false;
    if(g_slot[j].volStep <= 0.0 || g_slot[j].volMin <= 0.0)
       return false;
    return true;
+  }
+
+//--- Work out the broker's symbol suffix from the chart symbol.
+//--- Many brokers quote EURUSDm, EURUSD.a, EURUSD_ecn, EURUSDpro ... and a
+//--- plain "EURUSD" then resolves to nothing. Getting this wrong means the
+//--- whole universe fails to resolve and the EA has nothing to rank.
+void DetectAutoSuffix()
+  {
+   g_autoSuffix = "";
+   if(StringLen(InpSymbolSuffix) > 0)
+      return;                                  // the user told us explicitly
+
+   string cs = _Symbol;
+   if(StringLen(cs) <= 6)
+      return;                                  // plain 6-letter name, no suffix
+
+   string cand = StringSubstr(cs, 6);
+   //--- only trust it if it actually produces a real symbol
+   if(SymbolSelect("EURUSD" + cand, true) || SymbolSelect("USDJPY" + cand, true) ||
+      SymbolSelect("GBPUSD" + cand, true))
+     {
+      g_autoSuffix = cand;
+      LogInfo("Auto-detected broker symbol suffix from the chart symbol " + cs +
+              " -> \"" + cand + "\"");
+     }
   }
 
 //--- resolve a user supplied name against what the broker actually offers
@@ -399,21 +440,63 @@ string ResolveSymbol(const string raw)
    if(StringLen(s) == 0)
       return "";
 
-   string withSuffix = s + InpSymbolSuffix;
-   if(SymbolSelect(withSuffix, true))
-      return withSuffix;
+   //--- 1. explicit suffix from the inputs
+   if(StringLen(InpSymbolSuffix) > 0 && SymbolSelect(s + InpSymbolSuffix, true))
+      return s + InpSymbolSuffix;
+
+   //--- 2. the name exactly as given
    if(SymbolSelect(s, true))
       return s;
 
-   //--- last resort: scan the broker list for a prefix match
-   int total = SymbolsTotal(false);
-   for(int i = 0; i < total; i++)
+   //--- 3. the suffix inferred from the chart symbol
+   if(StringLen(g_autoSuffix) > 0 && SymbolSelect(s + g_autoSuffix, true))
+      return s + g_autoSuffix;
+
+   //--- 4. prefix scan over the full broker list, then over Market Watch
+   for(int pass = 0; pass < 2; pass++)
      {
-      string n = SymbolName(i, false);
-      if(StringFind(n, s) == 0 && SymbolSelect(n, true))
-         return n;
+      bool selectedOnly = (pass == 1);
+      int total = SymbolsTotal(selectedOnly);
+      for(int i = 0; i < total; i++)
+        {
+         string n = SymbolName(i, selectedOnly);
+         if(StringLen(n) > 0 && StringFind(n, s) == 0 && SymbolSelect(n, true))
+            return n;
+        }
      }
    return "";
+  }
+
+//--- When the universe cannot be built, show the user what their broker
+//--- actually calls these instruments so they can fix InpSymbols.
+void PrintBrokerSymbolSuggestions()
+  {
+   Print("[CSMOM] ---- symbols available at your broker containing \"USD\" ----");
+   int shown = 0;
+   string line = "";
+   for(int pass = 0; pass < 2 && shown == 0; pass++)
+     {
+      bool selectedOnly = (pass == 1);
+      int total = SymbolsTotal(selectedOnly);
+      for(int i = 0; i < total && shown < 48; i++)
+        {
+         string n = SymbolName(i, selectedOnly);
+         if(StringLen(n) == 0 || StringFind(n, "USD") < 0)
+            continue;
+         line += n + "   ";
+         shown++;
+         if(shown % 6 == 0)
+           {
+            Print("[CSMOM]   ", line);
+            line = "";
+           }
+        }
+     }
+   if(StringLen(line) > 0)
+      Print("[CSMOM]   ", line);
+   if(shown == 0)
+      Print("[CSMOM]   (none found - open Market Watch, right-click, 'Show All')");
+   Print("[CSMOM] Copy the exact names above into InpSymbols, or set InpSymbolSuffix.");
   }
 
 //+------------------------------------------------------------------+
@@ -429,8 +512,16 @@ bool BuildUniverse()
       return false;
      }
 
+   //--- release any handles from a previous attempt so repeated calls
+   //--- cannot leak indicator handles
+   for(int k = 0; k < g_count; k++)
+      if(g_slot[k].atrHandle != INVALID_HANDLE)
+         IndicatorRelease(g_slot[k].atrHandle);
+
    ArrayResize(g_slot, 0);
    g_count = 0;
+
+   DetectAutoSuffix();
 
    for(int i = 0; i < n; i++)
      {
@@ -473,13 +564,8 @@ bool BuildUniverse()
       sd.lots        = 0.0;
       sd.hasPosition = false;
 
-      sd.atrHandle = iATR(resolved, InpStopTF, InpATRPeriod);
-      if(sd.atrHandle == INVALID_HANDLE)
-        {
-         LogWarn("Could not create an ATR handle for " + resolved + " - skipped.");
-         continue;
-        }
-
+      //--- the ATR handle is created lazily by EnsureAtrHandle(); failing
+      //--- here would drop the symbol forever in the tester
       ArrayResize(g_slot, g_count + 1);
       g_slot[g_count] = sd;
       g_count++;
@@ -500,8 +586,9 @@ bool BuildUniverse()
 
    if(g_count < 2)
      {
-      LogWarn("A cross-sectional strategy needs at least 2 tradable symbols (got " +
-              IntegerToString(g_count) + ").");
+      Print("[CSMOM][WARN] Only ", g_count, " of the symbols in InpSymbols could be resolved. "
+            "A cross-sectional strategy needs at least 2.");
+      PrintBrokerSymbolSuggestions();
       return false;
      }
 
@@ -1389,16 +1476,47 @@ void UpdateRiskGuards()
 
 bool TradingAllowed()
   {
-   if(g_haltedHard || g_haltedToday)
+   if(g_haltedHard)
+     {
+      LogWarn("Trading blocked: the max-drawdown kill switch has fired. Restart the EA to clear it.");
       return false;
+     }
+   if(g_haltedToday)
+     {
+      LogWarn("Trading blocked: the daily-loss guard is active until tomorrow.");
+      return false;
+     }
+
    if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
+     {
+      LogWarn("Trading blocked: 'Allow Algo Trading' is unticked in this EA's properties dialog "
+              "(Common tab). In the Strategy Tester it is on the Settings tab.");
       return false;
-   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
-      return false;
-   if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
-      return false;
-   if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
-      return false;
+     }
+
+   //--- Terminal and account level switches are meaningless inside the
+   //--- Strategy Tester, and checking them there is a classic silent
+   //--- killer: with the terminal AutoTrading button off, a backtest
+   //--- would run to completion without ever placing a single order.
+   if(!(bool)MQLInfoInteger(MQL_TESTER))
+     {
+      if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+        {
+         LogWarn("Trading blocked: the terminal AutoTrading button is OFF (toolbar, top of MT5).");
+         return false;
+        }
+      if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
+        {
+         LogWarn("Trading blocked: the broker has disabled expert trading on this account.");
+         return false;
+        }
+      if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+        {
+         LogWarn("Trading blocked: trading is disabled on this account "
+                 "(are you logged in with the investor password?).");
+         return false;
+        }
+     }
    return true;
   }
 
@@ -1645,15 +1763,29 @@ void UpdatePanel()
 //+------------------------------------------------------------------+
 void Heartbeat()
   {
-   if(g_count < 2)
-      return;
-
    datetime now = TimeCurrent();
 
    //--- throttle the housekeeping to once per second
    if(now == g_lastMaintain)
       return;
    g_lastMaintain = now;
+
+   //--- keep retrying the universe until the broker/tester gives us enough
+   //--- symbols; without this a cold start would wedge the EA forever
+   if(g_count < 2)
+     {
+      if(now - g_lastUniverseTry >= 60)
+        {
+         g_lastUniverseTry = now;
+         BuildUniverse();
+        }
+      if(g_count < 2)
+        {
+         UpdatePanel();
+         return;
+        }
+      Print("[CSMOM] Universe is now ready with ", g_count, " symbols.");
+     }
 
    //--- track elapsed signal-timeframe bars for REB_EVERY_N_BARS
    datetime bt = SignalBarTime();
@@ -1670,11 +1802,13 @@ void Heartbeat()
    if(TradingAllowed() && ShouldRebalance(now))
       Rebalance();
 
-   //--- one-shot readiness report once the terminal has warmed up
-   if(InpRunDiagnostics && !g_diagShown && g_lastRebalance == 0 && g_barCounter >= 2)
+   //--- While nothing has traded yet, re-print the readiness report every
+   //--- 4 hours of chart time so the journal always explains itself.
+   if(InpRunDiagnostics && g_lastRebalance == 0 && g_barCounter >= 2 &&
+      (g_lastDiag == 0 || now - g_lastDiag >= 4 * 3600))
      {
-      g_diagShown = true;
-      Print("[CSMOM] No rebalance has run yet. Readiness report:");
+      g_lastDiag = now;
+      Print("[CSMOM] No rebalance has completed yet. Readiness report:");
       DiagnoseUniverse();
      }
 
@@ -1712,12 +1846,32 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
      }
 
+   Print("[CSMOM] ===========================================================");
+   Print("[CSMOM]  Cross-Sectional Momentum EA v1.10 - starting up");
+   PrintFormat("[CSMOM]  chart=%s %s | tester=%s | visual=%s",
+               _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
+               (MQLInfoInteger(MQL_TESTER) ? "YES" : "no"),
+               (MQLInfoInteger(MQL_VISUAL_MODE) ? "YES" : "no"));
+   PrintFormat("[CSMOM]  signalTF=%s f=%d skip=%d | rebalance=%s | legs=%dL/%dS",
+               EnumToString(InpSignalTF), InpFormationBars, InpSkipBars,
+               EnumToString(InpRebalanceMode), InpLongCount, InpShortCount);
+   Print("[CSMOM] ===========================================================");
+   Print("[CSMOM]  If you do not see this line in the Journal, the EA is not "
+         "attached or was not recompiled (press F7 in MetaEditor).");
+
    g_trade.SetExpertMagicNumber(InpMagic);
    g_trade.SetDeviationInPoints(InpSlippage);
    g_trade.SetAsyncMode(false);
 
-   if(!BuildUniverse())
-      return INIT_FAILED;
+   //--- Never abort init just because the universe is not ready. Inside the
+   //--- Strategy Tester the other symbols only come alive after the first
+   //--- few bars; returning INIT_FAILED here makes the EA disappear and the
+   //--- backtest silently produces zero trades. Heartbeat() keeps retrying.
+   BuildUniverse();
+   g_lastUniverseTry = TimeCurrent();
+   if(g_count < 2)
+      Print("[CSMOM] Universe not ready yet - will keep retrying every 60 seconds. "
+            "The EA is still loaded.");
 
    g_equityPeak     = AccountInfoDouble(ACCOUNT_EQUITY);
    g_dayStartEquity = g_equityPeak;
