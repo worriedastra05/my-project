@@ -32,8 +32,6 @@
 #property description "Double Breakout (range break -> pullback -> re-break) EA for Gold with SL/TP, news filter and dashboard."
 
 #include <Trade/Trade.mqh>
-#include <Trade/PositionInfo.mqh>
-#include <Trade/OrderInfo.mqh>
 
 #include "DBG_Utils.mqh"
 #include "DBG_TimeZone.mqh"
@@ -135,8 +133,6 @@ input bool              InpShowLevels         = true;       // Draw range / trig
 //| GLOBALS                                                          |
 //+------------------------------------------------------------------+
 CTrade          trade;
-CPositionInfo   posInfo;
-COrderInfo      ordInfo;
 CDbgTimeZone    TZ;
 CDbgNews        News;
 CDbgDashboard   Panel;
