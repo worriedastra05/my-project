@@ -1,0 +1,5 @@
+# MetaTrader build output
+*.ex5
+*.ex4
+# python
+__pycache__/
