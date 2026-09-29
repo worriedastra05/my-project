@@ -45,7 +45,8 @@ input group "=== 1. GENERAL ==="
 input long              InpMagic              = 20260929;   // Magic number
 input string            InpComment            = "DoubleBreakoutGold"; // Order comment
 input ENUM_TIMEFRAMES   InpSignalTF           = PERIOD_M15; // Signal timeframe
-input double            InpMaxSpreadPoints    = 60;         // Max allowed spread (points, 0=off)
+input double            InpMaxSpreadPoints    = 0;          // Max spread in POINTS (0 = off, broker dependent)
+input double            InpMaxSpreadAtrPct    = 12.0;       // Max spread as % of ATR (0 = off, broker independent)
 input ulong             InpSlippage           = 30;         // Max deviation (points)
 input bool              InpVerboseLog         = true;       // Verbose journal logging
 
@@ -69,6 +70,7 @@ input ENUM_DBG_MODE     InpMode               = DBG_MODE_REBREAK; // Double brea
 input ENUM_DBG_ENTRY    InpEntryType          = DBG_ENTRY_STOP;   // Entry execution
 input double            InpBreakBufferAtr     = 0.10;       // Breakout buffer (x ATR)
 input double            InpMinBodyRatio       = 0.55;       // Min body/range of break candle (0=off)
+input double            InpMaxBreakDistAtr    = 1.50;       // Skip break if already extended > x ATR beyond level (0=off)
 input double            InpMinPullbackPct     = 20.0;       // Min pullback of break leg (%)
 input double            InpMaxPullbackPct     = 70.0;       // Max pullback (>this = failed break) (%)
 input int               InpTriggerExpiryMin   = 120;        // Stop order lifetime (minutes)
@@ -123,8 +125,8 @@ input group "=== 7. DASHBOARD ==="
 input bool              InpShowPanel          = true;       // Show dashboard
 input ENUM_BASE_CORNER  InpPanelCorner        = CORNER_LEFT_UPPER; // Panel corner
 input int               InpPanelX             = 12;         // Panel X
-input int               InpPanelY             = 18;         // Panel Y
-input int               InpPanelWidth         = 430;        // Panel width
+input int               InpPanelY             = 100;        // Panel Y (100 = below one-click trading)
+input int               InpPanelWidth         = 470;        // Panel width
 input int               InpPanelFontSize      = 8;          // Font size
 input string            InpPanelFont          = "Consolas"; // Font
 input bool              InpShowLevels         = true;       // Draw range / trigger levels on chart
@@ -680,7 +682,14 @@ bool TradingAllowed(string &reason)
    if(g_tradesToday>=InpMaxTradesPerDay && InpMaxTradesPerDay>0) { reason="max trades/day"; return(false); }
    if(InpMaxConsecLosses>0 && g_consecLoss>=InpMaxConsecLosses)  { reason="loss streak";    return(false); }
    if(InpMaxSpreadPoints>0 && DbgSpreadPoints(_Symbol)>InpMaxSpreadPoints)
-     { reason=StringFormat("spread %.0f > %.0f",DbgSpreadPoints(_Symbol),InpMaxSpreadPoints); return(false); }
+     { reason=StringFormat("spread %.0f pts > %.0f",DbgSpreadPoints(_Symbol),InpMaxSpreadPoints); return(false); }
+   if(InpMaxSpreadAtrPct>0.0 && g_atr>0.0)
+     {
+      double sprPrice = DbgAsk(_Symbol)-DbgBid(_Symbol);
+      double pct      = sprPrice/g_atr*100.0;
+      if(pct>InpMaxSpreadAtrPct)
+        { reason=StringFormat("spread %.1f%% of ATR > %.1f%%",pct,InpMaxSpreadAtrPct); return(false); }
+     }
    return(true);
   }
 
@@ -886,6 +895,13 @@ void ProcessBar(void)
       //--- candle quality filter
       if(InpMinBodyRatio>0.0 && rng>0.0 && (body/rng)<InpMinBodyRatio) return;
 
+      //--- too late: price is already far beyond the level (e.g. EA attached mid-move)
+      if(InpMaxBreakDistAtr>0.0 && g_atr>0.0)
+        {
+         double ext = (dir>0 ? cl-g_rangeHigh : g_rangeLow-cl);
+         if(ext>InpMaxBreakDistAtr*g_atr) return;
+        }
+
       //--- trend filter
       if(InpUseTrendFilter && g_trendMa>0.0)
         {
@@ -1082,18 +1098,26 @@ void UpdatePanel(void)
    d.gmtTime   = DbgFull(TZ.GmtNow());
    d.localTime = DbgFull(TimeLocal());
    d.cityTimes = TZ.CityLine();
-   d.sessionLine = TZ.SessionLine()+"   | range "+DbgHM(ServerToCfg(g_rangeStartSrv))+"-"+DbgHM(ServerToCfg(g_rangeEndSrv))
-                   +" | entries till "+DbgHM(ServerToCfg(g_tradeEndSrv))
-                   +(InpTimeBase==DBG_TB_GMT ? " GMT" : " srv");
+   d.sessionLine = StringFormat("%s | range %s-%s | entry till %s %s",TZ.SessionLine(),
+                                DbgHM(ServerToCfg(g_rangeStartSrv)),DbgHM(ServerToCfg(g_rangeEndSrv)),
+                                DbgHM(ServerToCfg(g_tradeEndSrv)),
+                                (InpTimeBase==DBG_TB_GMT ? "GMT" : "srv"));
 
    //--- market
    d.symTf      = _Symbol+"  "+StringSubstr(EnumToString(InpSignalTF),7);
    double spr   = DbgSpreadPoints(_Symbol);
    d.quoteLine  = StringFormat("%s / %s   spread %.0f pts",DbgPriceStr(_Symbol,DbgBid(_Symbol)),
                                DbgPriceStr(_Symbol,DbgAsk(_Symbol)),spr);
-   d.quoteColor = (InpMaxSpreadPoints>0 && spr>InpMaxSpreadPoints ? C'240,120,120' : C'225,230,238');
+   double sprBad = 0.0;
+   if(g_atr>0.0) sprBad = (DbgAsk(_Symbol)-DbgBid(_Symbol))/g_atr*100.0;
+   bool  sprHigh = (InpMaxSpreadPoints>0 && spr>InpMaxSpreadPoints) ||
+                   (InpMaxSpreadAtrPct>0.0 && sprBad>InpMaxSpreadAtrPct);
+   d.quoteColor = (sprHigh ? C'240,120,120' : C'225,230,238');
    string tfTxt = StringSubstr(EnumToString(InpSignalTF),7);
-   d.atrLine    = StringFormat("ATR(%s) %.2f | ATR(D1) %.2f | RVOL %.2f",tfTxt,g_atr,g_atrD1,g_rvol);
+   string rvolTxt = (InpMinRvol<=0.0 ? "off" : StringFormat("%.2f",g_rvol));
+   double sprPct  = (g_atr>0.0 ? (DbgAsk(_Symbol)-DbgBid(_Symbol))/g_atr*100.0 : 0.0);
+   d.atrLine    = StringFormat("ATR(%s) %.2f | ATR(D1) %.2f | RVOL %s | spr %.1f%%ATR",
+                               tfTxt,g_atr,g_atrD1,rvolTxt,sprPct);
 
    //--- strategy
    color pc; d.phaseText = PhaseText(pc); d.phaseColor = pc;
@@ -1152,9 +1176,14 @@ void UpdatePanel(void)
      }
 
    if(News.NextEvent(TimeTradeServer(),ev,toEv))
-      d.nextNews = StringFormat("%s %s %s  %s (in %s)",DbgHM(ev.time),ev.currency,
+     {
+      datetime nowSrv = TimeTradeServer();
+      bool sameDay = ((long)ev.time/86400 == (long)nowSrv/86400);
+      string when  = (sameDay ? DbgHM(ev.time) : TimeToString(ev.time,TIME_DATE|TIME_MINUTES));
+      d.nextNews = StringFormat("%s %s %s %s (in %s)",when,ev.currency,
                                 CDbgNews::ImpText(ev.importance),
-                                StringSubstr(ev.name,0,26),DbgDuration(toEv));
+                                StringSubstr(ev.name,0,22),DbgDuration(toEv));
+     }
    else
       d.nextNews = (News.Total()>0 ? "none left today" : "no data ("+News.LastError()+")");
 
@@ -1184,6 +1213,7 @@ void UpdatePanel(void)
    if(g_paused)                       { d.statusText="PAUSED (manual)";       d.statusColor=C'240,200,90'; }
    else if(!TradingAllowed(reason))   { d.statusText="STANDBY: "+reason;      d.statusColor=C'240,160,90'; }
    else                               { d.statusText="ACTIVE - "+(StringLen(g_lastMsg)>0 ? g_lastMsg : "monitoring"); d.statusColor=C'120,230,150'; }
+   if(StringLen(d.statusText)>42) d.statusText = StringSubstr(d.statusText,0,41)+"~";
 
    Panel.Update(d);
   }
