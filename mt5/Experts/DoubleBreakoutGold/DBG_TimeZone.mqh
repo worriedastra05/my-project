@@ -39,8 +39,8 @@ public:
    int               OffsetSec(void) const { return(m_offset); }
    double            OffsetHours(void) const { return(m_offset/3600.0); }
    datetime          ServerNow(void) const { return(TimeTradeServer()); }
-   datetime          ToGmt(const datetime serverTime) const { return(serverTime-(datetime)m_offset); }
-   datetime          ToServer(const datetime gmtTime) const { return(gmtTime+(datetime)m_offset); }
+   datetime          ToGmt(const datetime serverTime) const { return((datetime)((long)serverTime-(long)m_offset)); }
+   datetime          ToServer(const datetime gmtTime) const { return((datetime)((long)gmtTime+(long)m_offset)); }
    datetime          GmtNow(void) const { return(ToGmt(TimeTradeServer())); }
 
    //--- world clocks (returned as datetime carrying local wall time)
@@ -137,7 +137,7 @@ int CDbgTimeZone::EstimateFromHistory(void)
       datetime t = r[i].time;                                     // first bar of the week (server)
       for(int o=-12;o<=14;o++)
         {
-         datetime gmt = t-(datetime)(o*3600);
+         datetime gmt = (datetime)((long)t-(long)o*3600);
          MqlDateTime g; TimeToStruct(gmt,g);
          if(g.day_of_week!=0) continue;                           // must be Sunday in GMT
          bool usDst = DbgIsUsDst(gmt);
@@ -160,7 +160,8 @@ int CDbgTimeZone::EstimateFromHistory(void)
    m_supportsDst   = (bw>0 && bs>0 && m_histWinterOff!=m_histSummerOff);
 
    //--- which regime are we in right now?
-   datetime nowGmtGuess = TimeTradeServer()-(datetime)(m_supportsDst ? m_histSummerOff : m_histWinterOff);
+   long     curOff      = (m_supportsDst ? m_histSummerOff : m_histWinterOff);
+   datetime nowGmtGuess = (datetime)((long)TimeTradeServer()-curOff);
    bool nowUsDst = DbgIsUsDst(nowGmtGuess);
    if(!m_supportsDst) return(bw>=bs ? m_histWinterOff : m_histSummerOff);
    return(nowUsDst ? m_histSummerOff : m_histWinterOff);
@@ -170,18 +171,18 @@ int CDbgTimeZone::EstimateFromHistory(void)
 datetime CDbgTimeZone::NewYork(void) const
   {
    datetime g = GmtNow();
-   return(g+(datetime)((DbgIsUsDst(g) ? -4 : -5)*3600));
+   return((datetime)((long)g+(long)(DbgIsUsDst(g) ? -4 : -5)*3600));
   }
 datetime CDbgTimeZone::London(void) const
   {
    datetime g = GmtNow();
-   return(g+(datetime)((DbgIsEuDst(g) ? 1 : 0)*3600));
+   return((datetime)((long)g+(long)(DbgIsEuDst(g) ? 1 : 0)*3600));
   }
-datetime CDbgTimeZone::Tokyo(void) const  { return(GmtNow()+(datetime)(9*3600)); }
+datetime CDbgTimeZone::Tokyo(void) const  { return((datetime)((long)GmtNow()+9*3600)); }
 datetime CDbgTimeZone::Sydney(void) const
   {
    datetime g = GmtNow();
-   return(g+(datetime)((DbgIsAuDst(g) ? 11 : 10)*3600));
+   return((datetime)((long)g+(long)(DbgIsAuDst(g) ? 11 : 10)*3600));
   }
 
 //+------------------------------------------------------------------+

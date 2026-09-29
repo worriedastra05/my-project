@@ -237,12 +237,13 @@ bool DbgInList(const string &list[],const string value)
 datetime DbgNthWeekday(const int year,const int month,const int weekday,const int nth,const int hour)
   {
    MqlDateTime dt;
+   ZeroMemory(dt);
    dt.year=year; dt.mon=month; dt.day=1; dt.hour=hour; dt.min=0; dt.sec=0;
    datetime first = StructToTime(dt);
    MqlDateTime f; TimeToStruct(first,f);
    int delta = (weekday - f.day_of_week + 7)%7;
-   datetime res = first + (datetime)delta*86400;
-   if(nth>1) res += (datetime)(nth-1)*7*86400;
+   datetime res = (datetime)((long)first + (long)delta*86400);
+   if(nth>1) res = (datetime)((long)res + (long)(nth-1)*7*86400);
    return(res);
   }
 
@@ -252,12 +253,13 @@ datetime DbgLastWeekday(const int year,const int month,const int weekday,const i
    int nm = month+1, ny = year;
    if(nm>12) { nm=1; ny++; }
    MqlDateTime dt;
+   ZeroMemory(dt);
    dt.year=ny; dt.mon=nm; dt.day=1; dt.hour=hour; dt.min=0; dt.sec=0;
    datetime firstNext = StructToTime(dt);
    datetime cur = firstNext - 86400;      // last day of the requested month
    MqlDateTime c; TimeToStruct(cur,c);
    int back = (c.day_of_week - weekday + 7)%7;
-   return(cur - (datetime)back*86400);
+   return((datetime)((long)cur - (long)back*86400));
   }
 
 //--- US DST: 2nd Sunday of March 07:00 UTC -> 1st Sunday of November 06:00 UTC
@@ -333,8 +335,8 @@ public:
    int               OffsetSec(void) const { return(m_offset); }
    double            OffsetHours(void) const { return(m_offset/3600.0); }
    datetime          ServerNow(void) const { return(TimeTradeServer()); }
-   datetime          ToGmt(const datetime serverTime) const { return(serverTime-(datetime)m_offset); }
-   datetime          ToServer(const datetime gmtTime) const { return(gmtTime+(datetime)m_offset); }
+   datetime          ToGmt(const datetime serverTime) const { return((datetime)((long)serverTime-(long)m_offset)); }
+   datetime          ToServer(const datetime gmtTime) const { return((datetime)((long)gmtTime+(long)m_offset)); }
    datetime          GmtNow(void) const { return(ToGmt(TimeTradeServer())); }
 
    //--- world clocks (returned as datetime carrying local wall time)
@@ -431,7 +433,7 @@ int CDbgTimeZone::EstimateFromHistory(void)
       datetime t = r[i].time;                                     // first bar of the week (server)
       for(int o=-12;o<=14;o++)
         {
-         datetime gmt = t-(datetime)(o*3600);
+         datetime gmt = (datetime)((long)t-(long)o*3600);
          MqlDateTime g; TimeToStruct(gmt,g);
          if(g.day_of_week!=0) continue;                           // must be Sunday in GMT
          bool usDst = DbgIsUsDst(gmt);
@@ -454,7 +456,8 @@ int CDbgTimeZone::EstimateFromHistory(void)
    m_supportsDst   = (bw>0 && bs>0 && m_histWinterOff!=m_histSummerOff);
 
    //--- which regime are we in right now?
-   datetime nowGmtGuess = TimeTradeServer()-(datetime)(m_supportsDst ? m_histSummerOff : m_histWinterOff);
+   long     curOff      = (m_supportsDst ? m_histSummerOff : m_histWinterOff);
+   datetime nowGmtGuess = (datetime)((long)TimeTradeServer()-curOff);
    bool nowUsDst = DbgIsUsDst(nowGmtGuess);
    if(!m_supportsDst) return(bw>=bs ? m_histWinterOff : m_histSummerOff);
    return(nowUsDst ? m_histSummerOff : m_histWinterOff);
@@ -464,18 +467,18 @@ int CDbgTimeZone::EstimateFromHistory(void)
 datetime CDbgTimeZone::NewYork(void) const
   {
    datetime g = GmtNow();
-   return(g+(datetime)((DbgIsUsDst(g) ? -4 : -5)*3600));
+   return((datetime)((long)g+(long)(DbgIsUsDst(g) ? -4 : -5)*3600));
   }
 datetime CDbgTimeZone::London(void) const
   {
    datetime g = GmtNow();
-   return(g+(datetime)((DbgIsEuDst(g) ? 1 : 0)*3600));
+   return((datetime)((long)g+(long)(DbgIsEuDst(g) ? 1 : 0)*3600));
   }
-datetime CDbgTimeZone::Tokyo(void) const  { return(GmtNow()+(datetime)(9*3600)); }
+datetime CDbgTimeZone::Tokyo(void) const  { return((datetime)((long)GmtNow()+9*3600)); }
 datetime CDbgTimeZone::Sydney(void) const
   {
    datetime g = GmtNow();
-   return(g+(datetime)((DbgIsAuDst(g) ? 11 : 10)*3600));
+   return((datetime)((long)g+(long)(DbgIsAuDst(g) ? 11 : 10)*3600));
   }
 
 //+------------------------------------------------------------------+
@@ -695,7 +698,8 @@ void CDbgNews::Configure(const bool enabled,const string currencyList,const stri
             tmp[ArraySize(tmp)-1]=c;
            }
          if(ArraySize(tmp)==0) { ArrayResize(tmp,1); tmp[0]="USD"; }
-         ArrayCopy(m_currencies,tmp);
+         ArrayResize(m_currencies,ArraySize(tmp));
+         for(int i=0;i<ArraySize(tmp);i++) m_currencies[i]=tmp[i];
         }
       else
          DbgSplitList(list,m_currencies);
@@ -1527,7 +1531,7 @@ void ResetSetup(void)
 //+------------------------------------------------------------------+
 bool IsTradingDay(void)
   {
-   MqlDateTime d; TimeToStruct(TimeTradeServer(),d);
+   MqlDateTime d; ZeroMemory(d); TimeToStruct(TimeTradeServer(),d);
    switch(d.day_of_week)
      {
       case 1: return(InpTradeMon);
@@ -2191,7 +2195,7 @@ void HandleExits(void)
    //--- friday flatten
    if(InpFridayCloseHour>0)
      {
-      MqlDateTime g; TimeToStruct(TZ.GmtNow(),g);
+      MqlDateTime g; ZeroMemory(g); TimeToStruct(TZ.GmtNow(),g);
       if(g.day_of_week==5 && g.hour>=InpFridayCloseHour)
         {
          if(FindPosition()) CloseAllPositions("friday close");
@@ -2389,11 +2393,10 @@ void UpdatePanel(void)
 //+------------------------------------------------------------------+
 int OnInit(void)
   {
-   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetExpertMagicNumber((ulong)InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
    trade.SetTypeFillingBySymbol(_Symbol);
    trade.SetAsyncMode(false);
-   trade.LogLevel(LOG_LEVEL_ERRORS);
 
    hAtrSig = iATR(_Symbol,InpSignalTF,14);
    hAtrD1  = iATR(_Symbol,PERIOD_D1,14);

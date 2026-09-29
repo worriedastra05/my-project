@@ -135,7 +135,8 @@ void CDbgNews::Configure(const bool enabled,const string currencyList,const stri
             tmp[ArraySize(tmp)-1]=c;
            }
          if(ArraySize(tmp)==0) { ArrayResize(tmp,1); tmp[0]="USD"; }
-         ArrayCopy(m_currencies,tmp);
+         ArrayResize(m_currencies,ArraySize(tmp));
+         for(int i=0;i<ArraySize(tmp);i++) m_currencies[i]=tmp[i];
         }
       else
          DbgSplitList(list,m_currencies);

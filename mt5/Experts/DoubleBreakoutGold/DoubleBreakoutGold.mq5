@@ -335,7 +335,7 @@ void ResetSetup(void)
 //+------------------------------------------------------------------+
 bool IsTradingDay(void)
   {
-   MqlDateTime d; TimeToStruct(TimeTradeServer(),d);
+   MqlDateTime d; ZeroMemory(d); TimeToStruct(TimeTradeServer(),d);
    switch(d.day_of_week)
      {
       case 1: return(InpTradeMon);
@@ -999,7 +999,7 @@ void HandleExits(void)
    //--- friday flatten
    if(InpFridayCloseHour>0)
      {
-      MqlDateTime g; TimeToStruct(TZ.GmtNow(),g);
+      MqlDateTime g; ZeroMemory(g); TimeToStruct(TZ.GmtNow(),g);
       if(g.day_of_week==5 && g.hour>=InpFridayCloseHour)
         {
          if(FindPosition()) CloseAllPositions("friday close");
@@ -1197,11 +1197,10 @@ void UpdatePanel(void)
 //+------------------------------------------------------------------+
 int OnInit(void)
   {
-   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetExpertMagicNumber((ulong)InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
    trade.SetTypeFillingBySymbol(_Symbol);
    trade.SetAsyncMode(false);
-   trade.LogLevel(LOG_LEVEL_ERRORS);
 
    hAtrSig = iATR(_Symbol,InpSignalTF,14);
    hAtrD1  = iATR(_Symbol,PERIOD_D1,14);

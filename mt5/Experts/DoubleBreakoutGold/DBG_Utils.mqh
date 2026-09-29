@@ -197,12 +197,13 @@ bool DbgInList(const string &list[],const string value)
 datetime DbgNthWeekday(const int year,const int month,const int weekday,const int nth,const int hour)
   {
    MqlDateTime dt;
+   ZeroMemory(dt);
    dt.year=year; dt.mon=month; dt.day=1; dt.hour=hour; dt.min=0; dt.sec=0;
    datetime first = StructToTime(dt);
    MqlDateTime f; TimeToStruct(first,f);
    int delta = (weekday - f.day_of_week + 7)%7;
-   datetime res = first + (datetime)delta*86400;
-   if(nth>1) res += (datetime)(nth-1)*7*86400;
+   datetime res = (datetime)((long)first + (long)delta*86400);
+   if(nth>1) res = (datetime)((long)res + (long)(nth-1)*7*86400);
    return(res);
   }
 
@@ -212,12 +213,13 @@ datetime DbgLastWeekday(const int year,const int month,const int weekday,const i
    int nm = month+1, ny = year;
    if(nm>12) { nm=1; ny++; }
    MqlDateTime dt;
+   ZeroMemory(dt);
    dt.year=ny; dt.mon=nm; dt.day=1; dt.hour=hour; dt.min=0; dt.sec=0;
    datetime firstNext = StructToTime(dt);
    datetime cur = firstNext - 86400;      // last day of the requested month
    MqlDateTime c; TimeToStruct(cur,c);
    int back = (c.day_of_week - weekday + 7)%7;
-   return(cur - (datetime)back*86400);
+   return((datetime)((long)cur - (long)back*86400));
   }
 
 //--- US DST: 2nd Sunday of March 07:00 UTC -> 1st Sunday of November 06:00 UTC
