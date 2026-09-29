@@ -1,4 +1,19 @@
-# Double Breakout Gold EA (MT5 / MQL5)
+# Gold EAs for MT5 (MQL5)
+
+Two independent, research-based Expert Advisors for **XAU/USD**:
+
+| EA | Idea | TF | Trades/day | Single file |
+|---|---|---|---|---|
+| **Double Breakout Gold** | session range break -> pullback -> re-break | M15 | ~0.5–1 | `mt5/SingleFile/DoubleBreakoutGold_AllInOne.mq5` |
+| **Order Flow Gold** | tick delta / CVD / absorption vs VWAP | M5 | ~5–8 | `mt5/SingleFile/OrderFlowGold_AllInOne.mq5` |
+
+Both share the same broker-timezone/DST detection, MT5 economic-calendar news filter
+(OFF 30 min before / ON 30 min after) and on-chart dashboard.
+Order Flow spec: [`docs/ORDERFLOW.md`](docs/ORDERFLOW.md) · Breakout spec: [`docs/STRATEGY.md`](docs/STRATEGY.md)
+
+---
+
+# 1) Double Breakout Gold EA
 
 Professional **Double Breakout** Expert Advisor for **XAU/USD (Gold)** with:
 
