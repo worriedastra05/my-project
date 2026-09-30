@@ -2,7 +2,7 @@
 InpMagic=20260931
 InpComment=OFGv2
 InpTF=5
-InpMaxSpreadAtrPct=9.0
+InpMaxSpreadAtrPct=25.0
 InpMaxSpreadPoints=0
 InpSlippage=30
 InpVerboseLog=true

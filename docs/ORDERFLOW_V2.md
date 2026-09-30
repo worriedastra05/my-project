@@ -82,3 +82,16 @@ The EA cannot do this for you; it only keeps costs realistic and reports live ex
 | Higher win rate | `InpTp1R` →0.45, `InpTp1ClosePct` →85 |
 | Bigger winners | `InpTp1ClosePct` →50, `InpTp2R` →3.4, `InpTrailAtrMult` →1.8 |
 | Let sizing compound the edge | `InpSizing=KELLY` (needs ≥20 closed trades first) |
+
+## 9. Troubleshooting: "no trades in backtest"
+
+The dashboard's **WHY / DIAGNOSTICS** section tells you exactly what is blocking, refreshed every closed M5 bar:
+
+* **Engine state** — LIVE/PAUSED and which engines the current regime enables.
+* **Gate** — `OPEN` or `BLOCKED - <reason>` (window, day, news, spread, streak, cooldown, STORM, VPIN...).
+* **Fade check / Flow check** — the nearest-miss for each engine with the actual numbers, e.g. `|z| 1.20 < 1.80` or `eff 0.71 > 0.50 (no absorption)` or `READY BUY score 0.52 >= 0.45`.
+* **Bars evaluated** — total bars checked plus how many reached the score gate (`fade-ready`, `flow-ready`). If these stay 0, the thresholds are too strict for your data.
+
+**Most common cause on M5 = the spread cap.** M5 ATR for gold is small (~$1.5–3), so a $0.24 spread is ~10–20% of ATR. v2's default is now `InpMaxSpreadAtrPct = 25` for this reason. If the gate shows `spread NN% ATR`, raise `InpMaxSpreadAtrPct` further or use `InpMaxSpreadPoints` instead. In the Strategy Tester also check *Ticks/spread modelling*: use "Every tick based on real ticks" and a realistic (not huge) spread, otherwise the tester's modelled spread alone blocks everything.
+
+Other quick checks if `fade-ready`/`flow-ready` stay 0: lower `InpMinScore` (0.45→0.35), lower `InpFadeZ`/`InpFlowZ` (→1.5), and confirm the **Data source** row shows `real ticks` or `candle proxy` (not `no flow data`).

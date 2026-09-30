@@ -1873,7 +1873,7 @@ input group "=== 1. GENERAL ==="
 input long             InpMagic            = 20260931;   // Magic number
 input string           InpComment          = "OFGv2";    // Order comment
 input ENUM_TIMEFRAMES  InpTF               = PERIOD_M5;  // Signal timeframe
-input double           InpMaxSpreadAtrPct  = 9.0;        // Max spread as % of ATR (0=off)
+input double           InpMaxSpreadAtrPct  = 25.0;       // Max spread as % of ATR (0=off) [M5 ATR is small]
 input double           InpMaxSpreadPoints  = 0;          // Max spread in points (0=off)
 input ulong            InpSlippage         = 30;         // Max deviation (points)
 input bool             InpVerboseLog       = true;       // Verbose journal logging
@@ -2015,6 +2015,15 @@ string   g_haltReason="";
 bool     g_paused=false;
 string   g_lastSignal="-",g_lastBlock="-";
 
+//--- diagnostics ("why no trade") - refreshed every closed bar
+string   g_diagGate="-";        // precondition gate status
+string   g_diagFade="-";        // nearest-miss reason for the fade engine
+string   g_diagFlow="-";        // nearest-miss reason for the flow engine
+string   g_diagEngine="-";      // which engines are enabled right now
+int      g_barsEval=0;          // how many bars have been evaluated
+int      g_fadeReady=0;         // bars where fade got all the way to the score gate
+int      g_flowReady=0;         // bars where flow got all the way to the score gate
+
 #define OFG2_VWAP_LINE  OFG2_PREFIX+"vwap"
 
 //--- forward decls
@@ -2032,6 +2041,7 @@ void   UpdateRegime(void);
 double KellyFraction(void);
 bool   TradingAllowed(string &reason);
 void   UpdateStats(void);
+void   Diagnose(void);
 void   CheckSignals(void);
 void   ManagePosition(void);
 void   HandleExits(void);
@@ -2352,6 +2362,99 @@ bool DoOpen(const int dir,const double slRaw,const string engine,const double sc
   }
 
 //+------------------------------------------------------------------+
+//| DIAGNOSTICS: every closed bar, work out exactly why (or why not)  |
+//| a trade would fire, independent of the trade gate. This is what   |
+//| the WHY / DIAGNOSTICS panel section reports.                      |
+//+------------------------------------------------------------------+
+void Diagnose(void)
+  {
+   g_barsEval++;
+
+   //--- 1) engines enabled by the current mode/regime
+   bool wantFade=(InpEngine==OFG2_ENG_BOTH||InpEngine==OFG2_ENG_FADE||
+                 (InpEngine==OFG2_ENG_AUTO&&(g_regime==REG_CALM||g_regime==REG_NORMAL)));
+   bool wantFlow=(InpEngine==OFG2_ENG_BOTH||InpEngine==OFG2_ENG_FLOW||
+                 (InpEngine==OFG2_ENG_AUTO&&(g_regime==REG_TREND||g_regime==REG_NORMAL)));
+   g_diagEngine=StringFormat("FADE %s | FLOW %s  [%s]",(wantFade?"ON":"off"),(wantFlow?"ON":"off"),RegimeText());
+
+   //--- 2) precondition gate
+   string reason="";
+   bool allowed=TradingAllowed(reason);
+   g_diagGate=(allowed?"OPEN - allowed to trade":"BLOCKED - "+reason);
+
+   //--- 3) flow data health
+   if(!Flow.Valid(1)) { g_diagFade="no flow data yet"; g_diagFlow="no flow data yet"; return; }
+
+   MqlRates r[];
+   ArraySetAsSeries(r,true);
+   int need=(InpFadeLookback+4>8?InpFadeLookback+4:8);
+   if(CopyRates(_Symbol,InpTF,0,need,r)<need) { g_diagFade="no bars"; g_diagFlow="no bars"; return; }
+
+   double o1=r[1].open,h1=r[1].high,l1=r[1].low,c1=r[1].close;
+   double rng=h1-l1;
+   if(rng<=0.0) { g_diagFade="flat bar"; g_diagFlow="flat bar"; return; }
+   double z   = InpUseDiurnalZ ? Flow.DeltaZBest(1,InpZLookback) : Flow.DeltaZ(1,InpZLookback);
+   double eff = Flow.Efficiency(1);
+   double vwap= Flow.Vwap(), sig=Flow.VwapSigma();
+   double ibs = Flow.Ibs(1);
+   double vpin= Flow.Vpin();
+   double body= MathAbs(c1-o1);
+   double closePos=(c1-l1)/rng;
+
+   //--- FADE nearest miss (buy side logic shown; sell is symmetric)
+   if(!wantFade)                              g_diagFade="off in this regime";
+   else if(vpin>=InpFadeMaxVpin)              g_diagFade=StringFormat("VPIN %.2f>=%.2f (too toxic to fade)",vpin,InpFadeMaxVpin);
+   else
+     {
+      double lowestPrev=DBL_MAX,highestPrev=-DBL_MAX;
+      for(int i=2;i<=InpFadeLookback+1 && i<ArraySize(r);i++)
+        { lowestPrev=MathMin(lowestPrev,r[i].low); highestPrev=MathMax(highestPrev,r[i].high); }
+      bool newLow=(l1<lowestPrev), newHigh=(h1>highestPrev);
+      if(!newLow && !newHigh)                 g_diagFade="no new extreme (need new "+IntegerToString(InpFadeLookback)+"-bar hi/lo)";
+      else if(MathAbs(z)<InpFadeZ)            g_diagFade=StringFormat("|z| %.2f < %.2f",MathAbs(z),InpFadeZ);
+      else if((newLow?closePos:(h1-c1)/rng)<InpFadeClosePos) g_diagFade=StringFormat("reject %.2f < %.2f",(newLow?closePos:(h1-c1)/rng),InpFadeClosePos);
+      else if(eff>InpFadeMaxEff)              g_diagFade=StringFormat("eff %.2f > %.2f (no absorption)",eff,InpFadeMaxEff);
+      else
+        {
+         int dir=(newLow?1:-1);
+         double vd=(sig>0.0?(c1-vwap)/sig:0.0);
+         bool farOk=(InpFadeVwapSigma<=0.0||sig<=0.0||(dir>0?(vwap-c1):(c1-vwap))>=InpFadeVwapSigma*sig);
+         if(!farOk)                           g_diagFade=StringFormat("VWAP dist %.2f < %.2f sigma",MathAbs(vd),InpFadeVwapSigma);
+         else
+           {
+            double sc=ScoreFade(dir,z,eff,vd,ibs);
+            g_fadeReady++;
+            g_diagFade=StringFormat("READY %s score %.2f %s %.2f",(dir>0?"BUY":"SELL"),sc,(sc>=InpMinScore?">=":"<"),InpMinScore);
+           }
+        }
+     }
+
+   //--- FLOW nearest miss
+   if(!wantFlow)                              g_diagFlow="off in this regime";
+   else
+     {
+      bool bigBody=(body>=InpFlowMinBodyAtr*g_atr);
+      bool efficient=(eff>=InpFlowMinEff);
+      double cvdS=Flow.CvdSlope(InpCvdSlopeBars);
+      bool up=(z>=InpFlowZ && c1>o1), dn=(z<=-InpFlowZ && c1<o1);
+      if(!up && !dn)                          g_diagFlow=StringFormat("|z| %.2f < %.2f or wrong dir",MathAbs(z),InpFlowZ);
+      else if(!bigBody)                       g_diagFlow=StringFormat("body %.2f < %.2f (%.2fxATR)",body,InpFlowMinBodyAtr*g_atr,InpFlowMinBodyAtr);
+      else if(!efficient)                     g_diagFlow=StringFormat("eff %.2f < %.2f",eff,InpFlowMinEff);
+      else if(up && c1<=r[2].high)            g_diagFlow="no break of prev high";
+      else if(dn && c1>=r[2].low)             g_diagFlow="no break of prev low";
+      else if(up && cvdS<=0.0)                g_diagFlow="CVD slope not up";
+      else if(dn && cvdS>=0.0)                g_diagFlow="CVD slope not down";
+      else
+        {
+         int dir=(up?1:-1);
+         double sc=ScoreFlow(dir,z,eff,body);
+         g_flowReady++;
+         g_diagFlow=StringFormat("READY %s score %.2f %s %.2f",(dir>0?"BUY":"SELL"),sc,(sc>=InpMinScore?">=":"<"),InpMinScore);
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
 void CheckSignals(void)
   {
    if(FindPosition()) return;
@@ -2559,6 +2662,12 @@ void BuildPanel(void)
    Panel.AddRow("eng","Engine / mode"); Panel.AddRow("score","Meta-score");
    Panel.AddRow("last","Last signal");  Panel.AddRow("block","Blocked by");
    Panel.AddRow("pos","Position");      Panel.AddRow("sltp","SL / TP");
+   Panel.AddSection("WHY  /  DIAGNOSTICS  (no-trade reasons)");
+   Panel.AddRow("dstate","Engine state");
+   Panel.AddRow("dgate","Gate");
+   Panel.AddRow("dfade","Fade check");
+   Panel.AddRow("dflow","Flow check");
+   Panel.AddRow("dcnt","Bars evaluated");
    Panel.AddSection("NEWS  FILTER  (MT5 CALENDAR)");
    Panel.AddRow("nstat","Status");      Panel.AddRow("nnext","Next event");
    Panel.AddRow("nwin","Window");
@@ -2636,6 +2745,14 @@ void UpdatePanel(void)
       Panel.SetValue("pos","flat",C'170,180,195');
       Panel.SetValue("sltp",StringFormat("TP1 %.2fR (%.0f%%) | TP2 %.2fR | trail %.1fxATR",InpTp1R,InpTp1ClosePct,InpTp2R,InpTrailAtrMult));
      }
+
+   //--- WHY / DIAGNOSTICS
+   color engCol=(g_paused?C'240,200,90':C'120,230,150');
+   Panel.SetValue("dstate",(g_paused?"PAUSED (manual)  |  ":"LIVE (scanning)  |  ")+g_diagEngine,engCol);
+   Panel.SetValue("dgate",g_diagGate,(StringFind(g_diagGate,"OPEN")==0?C'120,230,150':C'240,160,90'));
+   Panel.SetValue("dfade",g_diagFade,(StringFind(g_diagFade,"READY")==0?C'120,230,150':C'200,205,215'));
+   Panel.SetValue("dflow",g_diagFlow,(StringFind(g_diagFlow,"READY")==0?C'120,230,150':C'200,205,215'));
+   Panel.SetValue("dcnt",StringFormat("%d bars | fade-ready %d | flow-ready %d",g_barsEval,g_fadeReady,g_flowReady));
 
    DbgNewsEvent ev; int resume=0,toEv=0;
    if(!InpNewsEnabled) Panel.SetValue("nstat","DISABLED",C'150,160,175');
@@ -2751,6 +2868,7 @@ void OnTick(void)
      {
       g_lastBar=bt;
       UpdateRegime();
+      Diagnose();
       if(!g_paused) CheckSignals();
       DrawVwap();
      }
