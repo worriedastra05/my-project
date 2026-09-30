@@ -7,10 +7,11 @@ Two independent, research-based Expert Advisors for **XAU/USD**:
 | **Double Breakout Gold** | session range break -> pullback -> re-break | M15 | ~0.5–1 | `mt5/SingleFile/DoubleBreakoutGold_AllInOne.mq5` |
 | **Order Flow Gold** | tick delta / CVD / absorption vs VWAP | M5 | ~5–8 | `mt5/SingleFile/OrderFlowGold_AllInOne.mq5` |
 | **Order Flow Gold v2** | diurnal OFI + VPIN + micro-price + regime switch + meta-score sizing | M5 | ~5–8 | `mt5/SingleFile/OrderFlowGoldV2_AllInOne.mq5` |
+| **Order Flow Gold v3** | clean rewrite: candle-proxy delta/CVD/VWAP + FADE & FLOW engines, WHY/DIAGNOSTICS panel, backtest-safe | M5 | ~5–8 | `mt5/SingleFile/OrderFlowGoldV3_AllInOne.mq5` |
 
 Both share the same broker-timezone/DST detection, MT5 economic-calendar news filter
 (OFF 30 min before / ON 30 min after) and on-chart dashboard.
-Order Flow spec: [`docs/ORDERFLOW.md`](docs/ORDERFLOW.md) · **v2 (research-hardened): [`docs/ORDERFLOW_V2.md`](docs/ORDERFLOW_V2.md)** · Breakout spec: [`docs/STRATEGY.md`](docs/STRATEGY.md)
+Order Flow spec: [`docs/ORDERFLOW.md`](docs/ORDERFLOW.md) · **v2 (research-hardened): [`docs/ORDERFLOW_V2.md`](docs/ORDERFLOW_V2.md)** · **v3 (clean, backtest-safe): [`docs/ORDERFLOW_V3.md`](docs/ORDERFLOW_V3.md)** · Breakout spec: [`docs/STRATEGY.md`](docs/STRATEGY.md)
 
 ---
 
